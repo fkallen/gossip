@@ -4,6 +4,7 @@
 
 #include "config.h"
 #include "context.cuh"
+#include "kernels.cuh"
 
 namespace gossip {
     // shared between scatter, gather, all_to_all_async
@@ -203,7 +204,7 @@ namespace gossip {
                 const gpu_id_t trg = context->get_device_id(t.trg_gpu);
                 const auto stream  = context->get_streams(t.src_gpu)[t.trg_gpu];
                 cudaSetDevice(src);
-                const size_t size = t.len * sizeof(value_t);
+                //const size_t size = t.len * sizeof(value_t);
                 value_t * from = (t.event_before == nullptr) ?
                                 srcs[t.src_gpu] + t.src_pos :
                                 bufs[t.src_gpu] + t.src_pos;
@@ -212,7 +213,10 @@ namespace gossip {
                                 bufs[t.trg_gpu] + t.trg_pos;
 
                 if(t.event_before != nullptr) cudaStreamWaitEvent(stream, *(t.event_before), 0);
-                cudaMemcpyPeerAsync(to, trg, from, src, size, stream);
+                //cudaMemcpyPeerAsync(to, trg, from, src, size, stream);
+                dim3 block(256, 1, 1);
+                dim3 grid(SDIV(t.len, block.x), 1, 1);
+                copyKernel<<<grid, block, 0, stream>>>(from, t.len, to);
                 if(t.event_after != nullptr) cudaEventRecord(*(t.event_after), stream);
             } CUERR
 

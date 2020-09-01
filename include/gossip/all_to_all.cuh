@@ -7,6 +7,7 @@
 #include "context.cuh"
 #include "common.cuh"
 #include "all_to_all_plan.hpp"
+#include "kernels.cuh"
 
 namespace gossip {
 
@@ -197,8 +198,274 @@ private:
                 value_t * from = srcs[t.src_gpu] + t.src_pos;
                 value_t * to   = dsts[t.trg_gpu] + t.trg_pos;
 
-                cudaMemcpyPeerAsync(to, trg, from, src, size, stream);
+                //cudaMemcpyPeerAsync(to, trg, from, src, size, stream);
+
+                //cudaMemcpyAsync(to, from, size, cudaMemcpyDeviceToDevice, stream);
+
+                dim3 block(256, 1, 1);
+                dim3 grid(SDIV(t.len, block.x), 1, 1);
+                copyKernel<<<grid, block, 0, stream>>>(from, t.len, to);
             } CUERR
+
+            return true;
+        }
+    };
+
+
+
+    template<typename table_t>
+    struct transfer_handler_graph {
+        const context_t * context;
+
+        std::vector<std::vector<size_t> > src_offsets;
+        std::vector<std::vector<size_t> > phases_offsets;
+        std::vector<std::vector<size_t> > trg_offsets;
+
+        const std::vector<std::vector<size_t> >& src_displacements;
+        const std::vector<std::vector<table_t> >& sizes;
+
+        size_t num_phases;
+        std::vector<std::vector<transfer> > phases;
+
+        size_t num_chunks;
+
+        std::vector<cudaGraph_t> graphPerPhase;
+        std::vector<cudaGraphExec_t> execgraphPerPhase;
+
+        cudaStream_t captureStream;
+        cudaEvent_t captureEvent;
+        int gpuId;
+
+        transfer_handler_graph(
+            const context_t * context_,
+            const std::vector<std::vector<table_t>>& src_displacements,
+            const std::vector<std::vector<table_t>>& trg_displacements,
+            const std::vector<std::vector<table_t>>& sizes,
+            const size_t num_phases_,
+            const size_t num_chunks_ = 1
+        ) :
+            context(context_),
+            src_offsets(src_displacements), // src offsets begin at src displacements
+            phases_offsets(),
+            trg_offsets(trg_displacements), // trg offsets begin at trg displacements
+            src_displacements(src_displacements),
+            sizes(sizes),
+            num_phases(num_phases_),
+            phases(num_phases),
+            num_chunks(num_chunks_)
+        {
+            if(num_phases > 1)
+                phases_offsets.resize(num_phases-1, std::vector<size_t>(context->get_num_devices()));
+
+            graphPerPhase.resize(num_phases, nullptr);
+            execgraphPerPhase.resize(num_phases, nullptr);
+
+            cudaStreamCreate(&captureStream); CUERR;
+            cudaEventCreateWithFlags(&captureEvent, cudaEventDisableTiming); CUERR;
+            cudaGetDevice(&gpuId); CUERR;
+
+            // for(auto& g : graphPerPhase){
+            //     cudaGraphCreate(&g, 0); CUERR;
+            // }
+
+            // for(auto& g : execgraphPerPhase){
+            //     cudaGraphCreate(&g, 0); CUERR;
+            // }
+            
+        }
+
+        ~transfer_handler_graph(){
+            int cur;
+            cudaGetDevice(&cur);
+            cudaSetDevice(gpuId);
+
+            for(auto& g : graphPerPhase){
+                cudaGraphDestroy(g); CUERR;
+            }
+
+            graphPerPhase.clear();
+
+            for(auto& g : execgraphPerPhase){
+                cudaGraphExecDestroy(g); CUERR;
+            }
+
+            execgraphPerPhase.clear();
+
+            cudaStreamDestroy(captureStream); CUERR;
+            cudaEventDestroy(captureEvent); CUERR;
+
+            cudaSetDevice(cur);
+        }
+
+        void begin_transfer_setup(){
+
+        }
+
+        void end_transfer_setup(){
+
+        }
+
+        bool add_transfer(
+            const std::vector<gpu_id_t>& sequence,
+            const size_t chunks = 1
+        ) {
+            if(!check(sequence.size() == num_phases+1,
+                      "sequence size does not match number of phases."))
+                return false;
+
+            const size_t size_per_chunk = SDIV(sizes[sequence.front()][sequence.back()], num_chunks);
+            size_t transfer_size = size_per_chunk * chunks;
+
+            const size_t src_offset = src_offsets[sequence.front()][sequence.back()];
+            const size_t trg_offset = trg_offsets[sequence.front()][sequence.back()];
+            // check bounds
+            const size_t limit = src_displacements[sequence.front()][sequence.back()]
+                               + sizes[sequence.front()][sequence.back()];
+            if (src_offset + transfer_size > limit)
+                transfer_size = limit - src_offset;
+
+            if (num_phases == 1) {
+                size_t phase = 0;
+                phases[phase].emplace_back(sequence[phase], src_offset,
+                                           sequence[phase+1], trg_offset,
+                                           transfer_size);
+            }
+            else {
+                size_t phase = 0;
+                phases[phase].emplace_back(sequence[phase], src_offset,
+                                           sequence[phase+1], phases_offsets[phase][sequence[phase+1]],
+                                           transfer_size);
+
+                for (phase = 1; phase < num_phases-1; ++phase) {
+                    phases[phase].emplace_back(sequence[phase], phases_offsets[phase-1][sequence[phase]],
+                                               sequence[phase+1], phases_offsets[phase][sequence[phase+1]],
+                                               transfer_size);
+                }
+
+                phase = num_phases-1;
+                phases[phase].emplace_back(sequence[phase], phases_offsets[phase-1][sequence[phase]],
+                                           sequence[phase+1], trg_offset,
+                                           transfer_size);
+            }
+
+            src_offsets[sequence.front()][sequence.back()] += transfer_size;
+            for (size_t phase = 0; phase < num_phases-1; ++phase) {
+                phases_offsets[phase][sequence[phase+1]] += transfer_size;
+            }
+            trg_offsets[sequence.front()][sequence.back()] += transfer_size;
+
+            return true;
+        }
+
+        void show_phase(const size_t phase) const {
+            for(const transfer& t : phases[phase]) {
+                t.show();
+            }
+        }
+
+        template<typename value_t>
+        bool update_phase_graph(
+            const size_t phase,
+            const std::vector<value_t *>& srcs,
+            const std::vector<value_t *>& dsts
+        ) const {
+            cudaGraph_t graph;
+            cudaGraphExecUpdateResult updateResult;
+            cudaGraphNode_t errorNode;
+
+            cudaStream_t captureStream = context->get_streams(0)[0];
+            cudaStream_t captureEvent = context->get_events(0)[0];
+            cudaStreamBeginCapture(captureStream, cudaStreamCaptureModeRelaxed); CUERR;
+
+            cudaEventRecord(captureEvent, captureStream);
+
+            for(const transfer& t : phases[phase]) {
+                const gpu_id_t src = context->get_device_id(t.src_gpu);
+                const gpu_id_t trg = context->get_device_id(t.trg_gpu);
+                const auto stream  = context->get_streams(t.src_gpu)[t.trg_gpu];
+                const auto event = context->get_events(t.src_gpu)[t.trg_gpu];
+                cudaSetDevice(src);
+
+                cudaStreamWaitEvent(stream, captureEvent, 0);
+
+                const size_t size = t.len * sizeof(value_t);
+                value_t * from = srcs[t.src_gpu] + t.src_pos;
+                value_t * to   = dsts[t.trg_gpu] + t.trg_pos;
+
+                //cudaMemcpyPeerAsync(to, trg, from, src, size, stream);
+
+                cudaMemcpyAsync(to, from, size, cudaMemcpyDeviceToDevice, stream);
+
+                // dim3 block(256, 1, 1);
+                // dim3 grid(SDIV(t.len, block.x), 1, 1);
+                // copyKernel<<<grid, block, 0, stream>>>(from, t.len, to);
+
+                cudaStreamWaitEvent(captureStream, event, 0);
+            } 
+
+            cudaStreamEndCapture(stream, &graph);
+
+            CUERR;
+
+            // If we've already instantiated the graph, try to update it directly
+            // and avoid the instantiation overhead
+            if (execgraphPerPhase[phase] != NULL) {
+                // If the graph fails to update, errorNode will be set to the
+                // node causing the failure and updateResult will be set to a
+                // reason code.
+                cudaGraphExecUpdate(execgraphPerPhase[phase], graph, &errorNode, &updateResult);
+            }
+
+            // Instantiate during the first iteration or whenever the update
+            // fails for any reason
+            if (execgraphPerPhase[phase] == NULL || updateResult != cudaGraphExecUpdateSuccess) {
+
+                // If a previous update failed, destroy the cudaGraphExec_t
+                // before re-instantiating it
+                if (execgraphPerPhase[phase] != NULL) {
+                    cudaGraphExecDestroy(execgraphPerPhase[phase]);
+                }   
+                // Instantiate graphExec from graph. The error node and
+                // error message parameters are unused here.
+                cudaGraphInstantiate(&execgraphPerPhase[phase], graph, NULL, NULL, 0);
+            }   
+
+            cudaGraphDestroy(graph);
+
+            CUERR;
+
+            return true;
+        }
+
+        template<typename value_t>
+        bool execute_phase(
+            const size_t phase,
+            const std::vector<value_t *>& srcs,
+            const std::vector<value_t *>& dsts
+        ) const {
+            // for(const transfer& t : phases[phase]) {
+            //     const gpu_id_t src = context->get_device_id(t.src_gpu);
+            //     const gpu_id_t trg = context->get_device_id(t.trg_gpu);
+            //     const auto stream  = context->get_streams(t.src_gpu)[t.trg_gpu];
+            //     cudaSetDevice(src);
+            //     const size_t size = t.len * sizeof(value_t);
+            //     value_t * from = srcs[t.src_gpu] + t.src_pos;
+            //     value_t * to   = dsts[t.trg_gpu] + t.trg_pos;
+
+            //     //cudaMemcpyPeerAsync(to, trg, from, src, size, stream);
+
+            //     cudaMemcpyAsync(to, from, size, cudaMemcpyDeviceToDevice, stream);
+
+            //     // dim3 block(256, 1, 1);
+            //     // dim3 grid(SDIV(t.len, block.x), 1, 1);
+            //     // copyKernel<<<grid, block, 0, stream>>>(from, t.len, to);
+            // } CUERR
+
+            update_phase_graph(phase, srcs, dsts);
+
+            assert(execgraphPerPhase[phase] != nullptr);
+
+            cudaGraphLaunch(execgraphPerPhase[phase], context->get_streams(0)[0]);
 
             return true;
         }
@@ -260,16 +527,20 @@ public:
             }
         }
 
-        transfer_handler<table_t> transfers(context,
+        transfer_handler_graph<table_t> transfers(context,
                                             src_displacements,
                                             trg_displacements,
                                             send_counts,
                                             num_phases, num_chunks);
 
+        transfers.begin_transfer_setup();
+
         // prepare transfers according to transfer_plan
         for (const auto& sequence : transfer_plan.transfer_sequences()) {
-            transfers.push_back(sequence.seq, sequence.size);
+            transfers.add_transfer(sequence.seq, sequence.size);
         }
+
+        transfers.end_transfer_setup();
 
         if(verbose) {
             for (size_t p = 0; p < num_phases; ++p) {

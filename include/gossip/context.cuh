@@ -14,6 +14,7 @@ class context_t {
     gpu_id_t num_gpus;
     std::vector<gpu_id_t> device_ids;
     std::vector<std::vector<cudaStream_t>> streams;
+    std::vector<std::vector<cudaEvent_t>> events;
     std::vector<std::vector<PEER_STATUS>> peer_status;
     bool valid = true;
 
@@ -57,6 +58,18 @@ private:
             cudaDeviceSynchronize();
             for (gpu_id_t part = 0; part < num_gpus; ++part) {
                 cudaStreamCreate(&streams[src_gpu][part]);
+            }
+        } CUERR
+
+        events.resize(num_gpus, std::vector<cudaEvent_t>(num_gpus));
+
+        // create num_gpus^2 streams where streams[gpu*num_gpus+part]
+        // denotes the stream to be used for GPU gpu and partition part
+        for (gpu_id_t src_gpu = 0; src_gpu < num_gpus; ++src_gpu) {
+            cudaSetDevice(get_device_id(src_gpu));
+            cudaDeviceSynchronize();
+            for (gpu_id_t part = 0; part < num_gpus; ++part) {
+                cudaEventCreateWithFlags(&events[src_gpu][part], cudaEventDisableTiming);
             }
         } CUERR
 
@@ -128,6 +141,9 @@ public:
             for (gpu_id_t part = 0; part < num_gpus; ++part) {
                 cudaStreamSynchronize(get_streams(src_gpu)[part]);
                 cudaStreamDestroy(streams[src_gpu][part]);
+
+                cudaEventSynchronize(get_events(src_gpu)[part]);
+                cudaEventDestroy(get_events(src_gpu)[part]);
             }
         } CUERR
 
@@ -174,6 +190,11 @@ public:
         return streams[gpu];
     }
 
+    // return vector of events associated with to specified GPU
+    const std::vector<cudaEvent_t>& get_events (const gpu_id_t gpu) const noexcept {
+        return events[gpu];
+    }
+
     // sync all streams associated with the specified GPU
     void sync_gpu_streams (const gpu_id_t gpu) const noexcept {
         cudaSetDevice(get_device_id(gpu));
@@ -197,7 +218,7 @@ public:
 
     // check if both streams and device identifiers are created
     bool is_valid () const noexcept {
-        return !streams.empty() && !device_ids.empty();
+        return !streams.empty() && !events.empty() && !device_ids.empty();
     }
 
     void print_connectivity_matrix () const {
