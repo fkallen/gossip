@@ -139,11 +139,10 @@ public:
             cudaSetDevice(get_device_id(src_gpu));
             cudaDeviceSynchronize();
             for (gpu_id_t part = 0; part < num_gpus; ++part) {
-                cudaStreamSynchronize(get_streams(src_gpu)[part]);
-                cudaStreamDestroy(streams[src_gpu][part]);
+                cudaStreamSynchronize(get_streams(src_gpu)[part]); CUERR;
+                cudaStreamDestroy(streams[src_gpu][part]); CUERR;
 
-                cudaEventSynchronize(get_events(src_gpu)[part]);
-                cudaEventDestroy(get_events(src_gpu)[part]);
+                cudaEventDestroy(get_events(src_gpu)[part]); CUERR;
             }
         } CUERR
 
