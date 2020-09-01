@@ -36,6 +36,84 @@ void all2all(
 }
 
 template<typename data_t>
+void all2all_novalidation(
+    gossip::transfer_plan_t transfer_plan,
+    const size_t batch_size,
+    const size_t batch_size_secure) {
+
+    gossip::all2all::verify_plan(transfer_plan);
+
+    auto num_gpus = transfer_plan.num_gpus();
+
+    if(transfer_plan.valid()) {
+
+        auto context = gossip::context_t(num_gpus);
+        // context.print_connectivity_matrix();
+        auto all2all = gossip::all2all_t(context, transfer_plan);
+        auto multisplit = gossip::multisplit_t(context);
+        auto point2point = gossip::point2point_t(context);
+
+        run_multisplit_all2all_novalidation<data_t>(
+            context, all2all, multisplit, point2point,
+            batch_size, batch_size_secure);
+
+        context.sync_hard();
+    }
+}
+
+template<typename data_t>
+void all2all_graph(
+    gossip::transfer_plan_t transfer_plan,
+    const size_t batch_size,
+    const size_t batch_size_secure) {
+
+    gossip::all2all::verify_plan(transfer_plan);
+
+    auto num_gpus = transfer_plan.num_gpus();
+
+    if(transfer_plan.valid()) {
+
+        auto context = gossip::context_t(num_gpus);
+        // context.print_connectivity_matrix();
+        auto all2all = gossip::all2all_graph_t(context, transfer_plan);
+        auto multisplit = gossip::multisplit_t(context);
+        auto point2point = gossip::point2point_t(context);
+
+        run_multisplit_all2all_graph<data_t>(
+            context, all2all, multisplit, point2point,
+            batch_size, batch_size_secure);
+
+        context.sync_hard();
+    }
+}
+
+template<typename data_t>
+void all2all_graph_novalidation(
+    gossip::transfer_plan_t transfer_plan,
+    const size_t batch_size,
+    const size_t batch_size_secure) {
+
+    gossip::all2all::verify_plan(transfer_plan);
+
+    auto num_gpus = transfer_plan.num_gpus();
+
+    if(transfer_plan.valid()) {
+
+        auto context = gossip::context_t(num_gpus);
+        // context.print_connectivity_matrix();
+        auto all2all = gossip::all2all_graph_t(context, transfer_plan);
+        auto multisplit = gossip::multisplit_t(context);
+        auto point2point = gossip::point2point_t(context);
+
+        run_multisplit_all2all_graph_novalidation<data_t>(
+            context, all2all, multisplit, point2point,
+            batch_size, batch_size_secure);
+
+        context.sync_hard();
+    }
+}
+
+template<typename data_t>
 void all2all_async(
     gossip::transfer_plan_t transfer_plan,
     const size_t batch_size,
@@ -132,7 +210,7 @@ int main (int argc, char *argv[]) {
 
     // parse args using https://github.com/muellan/clipp
     using namespace clipp;
-    enum class mode {all2all, all2all_async, scatter_gather, broadcast, help};
+    enum class mode {all2all, all2all_novalid, all2all_graph, all2all_graph_novalid, all2all_async, scatter_gather, broadcast, help};
 
     mode selected;
     double security_factor = 1.5;
@@ -146,6 +224,9 @@ int main (int argc, char *argv[]) {
                 (
                     (
                         command("all2all").set(selected, mode::all2all) |
+                        command("all2all_novalid").set(selected, mode::all2all_novalid) |
+                        command("all2all_graph").set(selected, mode::all2all_graph) |
+                        command("all2all_graph_novalid").set(selected, mode::all2all_graph_novalid) |
                         command("all2all_async").set(selected, mode::all2all_async) |
                         command("broadcast").set(selected, mode::broadcast)
                     ),
@@ -174,6 +255,18 @@ int main (int argc, char *argv[]) {
             case mode::all2all:
                 std::cout << "RUN: all2all" << std::endl;
                 all2all<data_t>(parse_plan(plan_file.c_str()), data_size, data_size_secure);
+                break;
+            case mode::all2all_novalid:
+                std::cout << "RUN: all2all" << std::endl;
+                all2all_novalidation<data_t>(parse_plan(plan_file.c_str()), data_size, data_size_secure);
+                break;
+            case mode::all2all_graph:
+                std::cout << "RUN: all2all" << std::endl;
+                all2all_graph<data_t>(parse_plan(plan_file.c_str()), data_size, data_size_secure);
+                break;
+            case mode::all2all_graph_novalid:
+                std::cout << "RUN: all2all" << std::endl;
+                all2all_graph_novalidation<data_t>(parse_plan(plan_file.c_str()), data_size, data_size_secure);
                 break;
             case mode::all2all_async:
                 std::cout << "RUN: all2all_async" << std::endl;
