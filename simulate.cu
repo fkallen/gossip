@@ -265,15 +265,15 @@ int main (int argc, char *argv[]) {
                 all2all<data_t>(parse_plan(plan_file.c_str()), data_size, data_size_secure);
                 break;
             case mode::all2all_novalid:
-                std::cout << "RUN: all2all" << std::endl;
+                std::cout << "RUN: all2all_novalid" << std::endl;
                 all2all_novalidation<data_t>(parse_plan(plan_file.c_str()), data_size, data_size_secure);
                 break;
             case mode::all2all_graph:
-                std::cout << "RUN: all2all" << std::endl;
+                std::cout << "RUN: all2all_graph" << std::endl;
                 all2all_graph<data_t>(parse_plan(plan_file.c_str()), data_size, data_size_secure);
                 break;
             case mode::all2all_graph_novalid:
-                std::cout << "RUN: all2all" << std::endl;
+                std::cout << "RUN: all2all_graph_novalid" << std::endl;
                 all2all_graph_novalidation<data_t>(parse_plan(plan_file.c_str()), data_size, data_size_secure);
                 break;
             case mode::all2all_async:

@@ -222,11 +222,12 @@ private:
             }
         }
 
-        template<typename value_t>
+        template<typename value_t, typename index_t>
         bool update_graph(
             cudaGraphExec_t& execGraph,
             const std::vector<value_t *>& srcs,
-            const std::vector<value_t *>& dsts
+            const std::vector<value_t *>& dsts,
+            const std::vector<index_t>& srcs_lens
         ){
             cudaGraph_t graph;
             cudaGraphExecUpdateResult updateResult;
@@ -278,6 +279,27 @@ private:
                     }
                 }
             }
+
+            // cudaEventRecord(captureEvent, captureStream); CUERR;
+
+            // if(num_phases % 2 == 0){
+            //     //std::swap(srcs,dsts);
+            //     for(int i = 0; i < numGpus; i++){
+            //         const auto stream = context->get_streams(i)[0];
+            //         const auto event = context->get_events(i)[0];
+
+            //         cudaStreamWaitEvent(stream, captureEvent, 0); CUERR;
+
+            //         const size_t size = sizeof(value_t) * srcs_lens[i];
+            //         cudaMemcpyAsync(dsts[i], srcs[i], size, cudaMemcpyDeviceToDevice, stream);
+
+            //         cudaEventRecord(event, stream); CUERR;
+            //     }
+
+            //     for(int i = 0; i < numGpus; i++){
+            //         cudaStreamWaitEvent(captureStream, context->get_events(i)[0], 0); CUERR;
+            //     }
+            // }
 
             cudaStreamEndCapture(captureStream, &graph); CUERR;
 
@@ -383,7 +405,7 @@ public:
 
         transfers.end_transfer_setup();
 
-        transfers.update_graph(execgraphTotal, srcs, dsts);
+        transfers.update_graph(execgraphTotal, srcs, dsts, srcs_lens);
 
         if(verbose) {
             for (size_t p = 0; p < num_phases; ++p) {
